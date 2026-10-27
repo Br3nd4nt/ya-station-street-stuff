@@ -1,0 +1,25 @@
+#!/bin/sh
+# /etc/init.d/S50ledoff - stop the i2c preboot LED animations early.
+#
+# Without maind the logo-animation (purple pulse) and charge-animation keep
+# running forever. This script runs before S97quasar, waits briefly for the
+# led driver/helper and switches the LEDs off. When maind runs normally it
+# takes the LEDs over again after quasar starts.
+
+LED=/data/opt/bin/buttons_led.sh
+
+case "$1" in
+    start)
+        # Bunker mode only: normal mode must keep maind's ledfb triggers.
+        grep -q '"tasks"[[:space:]]*:[[:space:]]*\[\]' /system/vendor/quasar/launch.json 2>/dev/null || exit 0
+        i=0
+        while [ ! -x "$LED" ] && [ "$i" -lt 50 ]; do
+            sleep 0.2
+            i=$((i + 1))
+        done
+        [ -x "$LED" ] && "$LED" init
+        ;;
+    stop)
+        ;;
+esac
+exit 0

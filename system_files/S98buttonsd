@@ -1,0 +1,51 @@
+#!/bin/sh
+# /etc/init.d/S98buttonsd - standalone button daemon (mango)
+# Autostarts /data/opt/bin/buttonsd. Safe with maind running (grab=0).
+
+DAEMON=/data/opt/bin/buttonsd
+CONF=/data/opt/etc/buttonsd.conf
+PIDFILE=/data/opt/var/run/buttonsd.pid
+LOG=/data/opt/var/log/buttonsd.log
+
+start() {
+    [ -x "$DAEMON" ] || { echo "buttonsd: $DAEMON not found"; return 1; }
+    pidof buttonsd >/dev/null 2>&1 && return 0
+    mkdir -p /data/opt/var/log /data/opt/var/run
+    # Stop the i2c preboot animations (purple logo pulse + charge display)
+    # as early as possible. maind redraws its own LEDs when it is running.
+    [ -x /data/opt/bin/buttons_led.sh ] && /data/opt/bin/buttons_led.sh killanim
+    [ -x /data/opt/bin/buttons_volume.sh ] && /data/opt/bin/buttons_volume.sh restore
+    "$DAEMON" -d -c "$CONF"
+    echo "buttonsd: started"
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    killall buttonsd 2>/dev/null
+    echo "buttonsd: stopped"
+}
+
+status() {
+    if pidof buttonsd >/dev/null 2>&1; then
+        echo "buttonsd: running (pid $(pidof buttonsd))"
+        tail -n 5 "$LOG" 2>/dev/null
+    else
+        echo "buttonsd: not running"
+        return 1
+    fi
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *)
+        echo "usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit 0

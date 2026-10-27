@@ -1,0 +1,27 @@
+#!/bin/sh
+# /etc/init.d/S05ledoff - stop the i2c preboot LED animations as early as
+# possible. The led driver probes around 5-6 s; wait for its sysfs nodes and
+# switch the logo/charge LEDs off. S50ledoff is a later fallback.
+
+case "$1" in
+    start)
+        # Only touch the LEDs in bunker mode. In normal mode maind owns the
+        # ledfb-* triggers and expects them to stay configured.
+        grep -q '"tasks"[[:space:]]*:[[:space:]]*\[\]' /system/vendor/quasar/launch.json 2>/dev/null || exit 0
+        i=0
+        while [ ! -w /sys/devices/platform/logo-animation/stop ] && [ "$i" -lt 100 ]; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+        echo 0 > /sys/devices/platform/logo-animation/stop 2>/dev/null
+        echo 0 > /sys/devices/platform/charge-animation/stop 2>/dev/null
+        for l in /sys/class/leds/mango:*; do
+            [ -d "$l" ] || continue
+            echo none > "$l/trigger" 2>/dev/null
+            echo 0 > "$l/brightness" 2>/dev/null
+        done
+        ;;
+    stop)
+        ;;
+esac
+exit 0
