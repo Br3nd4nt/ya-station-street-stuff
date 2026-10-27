@@ -1,16 +1,41 @@
 #!/bin/sh
 # install-buttonsd.sh - deploy standalone button daemon to the station.
 # Run from the repo root on the Mac. Safe to re-run. Handles flaky wifi.
+#
+# The daemon needs maind/platformd to be dead, so this script enables
+# bunker mode (via helpers/killswitch.sh) before pushing files.
+#
+# Usage: install-buttonsd.sh HOST [PORT] [--reboot]
+#   HOST may be omitted only if $ST_HOST is set.
+#   PORT defaults to 2222 (override with $ST_PORT).
+#   --reboot  reboot the station at the end so bunker mode takes effect.
 set -u
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
-HOST=${ST_HOST:-192.168.10.185}
-PORT=${ST_PORT:-2222}
+
+HOST=""
+PORT=2222
+DO_REBOOT=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --reboot) DO_REBOOT=1 ;;
+        *)        if [ -z "$HOST" ]; then HOST=$arg; else PORT=$arg; fi ;;
+    esac
+done
+HOST=${HOST:-${ST_HOST:-}}
+PORT=${PORT:-${ST_PORT:-2222}}
+
+if [ -z "$HOST" ]; then
+    echo "usage: $0 HOST [PORT] [--reboot]  (or set ST_HOST)" >&2
+    exit 2
+fi
+
 SSH="ssh -p $PORT -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$HOST"
 
 wait_station() {
-    "$HERE/helpers/st-wait.sh" 300 || exit 1
+    "$HERE/helpers/st-wait.sh" "$HOST" "$PORT" 300 || exit 1
 }
 
 push_file() {
@@ -32,10 +57,11 @@ push_file() {
     exit 1
 }
 
-echo "[1/5] build check"
+echo "[1/7] build check"
 [ -x "$ROOT/bin/buttonsd" ] || { echo "bin/buttonsd missing; build it first" >&2; exit 1; }
 
-echo "[2/5] push files"
+echo "[2/7] push files"
+push_file "$ROOT/scripts/helpers/killswitch.sh" /data/opt/bin/killswitch.sh 755
 push_file "$ROOT/bin/buttonsd"          /data/opt/bin/buttonsd 755
 push_file "$ROOT/scripts/ring.sh"       /data/opt/bin/ring.sh 755
 push_file "$ROOT/scripts/buttons/buttons_led.sh"     /data/opt/bin/buttons_led.sh 755
@@ -47,7 +73,11 @@ push_file "$ROOT/scripts/buttons/buttons_bluetooth.sh" /data/opt/bin/buttons_blu
 push_file "$ROOT/system_files/buttonsd.conf" /data/opt/etc/buttonsd.conf 644
 $SSH 'mkdir -p /data/opt/etc/buttons.d /data/opt/var/log /data/opt/var/run'
 
-echo "[3/5] install init scripts"
+echo "[3/7] enable bunker mode (stops maind/platformd)"
+wait_station
+$SSH '/data/opt/bin/killswitch.sh on' || { echo "killswitch on failed" >&2; exit 1; }
+
+echo "[4/7] install init scripts"
 wait_station
 cat "$ROOT/system_files/S98buttonsd" | $SSH '
     cat > /tmp/S98buttonsd.new || exit 1
@@ -94,10 +124,22 @@ cat "$ROOT/system_files/S05ledoff" | $SSH '
 '
 if [ $? -ne 0 ]; then echo "S05 ledoff install failed" >&2; exit 1; fi
 
-echo "[4/5] start"
+echo "[5/7] start"
 wait_station
 $SSH '/etc/init.d/S98buttonsd restart; sleep 1; /etc/init.d/S98buttonsd status' || true
 
-echo "[5/5] log"
+echo "[6/7] log"
 $SSH 'tail -n 20 /data/opt/var/log/buttonsd.log 2>/dev/null' || true
+
+if [ "$DO_REBOOT" -eq 1 ]; then
+    echo "[7/7] reboot"
+    wait_station
+    $SSH 'sync; reboot' || true
+    echo "reboot sent; buttonsd will come up in bunker mode"
+else
+    echo "[7/7] skipping reboot (pass --reboot to apply bunker mode now)"
+    echo "note: maind/platformd are still running until you reboot"
+    echo "      run: $0 $HOST $PORT --reboot   or   ssh ... killswitch.sh status"
+fi
+
 echo "done"
